@@ -980,8 +980,8 @@ class LlmAgentBuilder:
                 f"Agent {agent.name} has preload_memory enabled but load_memory is disabled. preload_memory requires load_memory to be enabled."
             )
 
-        # Get API key from api_key_id
-        api_key = await get_api_key(self.db, agent)
+        # Get API key from api_key_id (api_base is set for custom OpenAI-compatible providers)
+        api_key, api_base = await get_api_key(self.db, agent)
 
         # Get output_key from config if specified
         output_key = agent.config.get("output_key") if agent.config else None
@@ -1116,9 +1116,13 @@ class LlmAgentBuilder:
                 except Exception as e:
                     logger.error(f"❌ Error calling to_function_declaration() on {mcp_tools[0].name}: {e}")
         
+        litellm_kwargs = {"model": agent.model, "api_key": api_key}
+        if api_base:
+            litellm_kwargs["api_base"] = api_base
+
         llm_agent_kwargs = {
             "name": agent.name,
-            "model": LiteLlm(model=agent.model, api_key=api_key),
+            "model": LiteLlm(**litellm_kwargs),
             "instruction": formatted_prompt,
             "description": agent.description,
             "tools": all_tools,

@@ -31,7 +31,7 @@ from typing import List, Tuple, Optional
 import uuid
 from google.adk.agents.llm_agent import LlmAgent
 from src.services.adk.tools.exit_loop import ExitLoopAgent
-from src.services.apikey_service import get_decrypted_api_key
+from src.services.apikey_service import get_decrypted_api_key, get_api_key_with_base_url
 from src.utils.logger import setup_logger
 from src.core.exceptions import AgentNotFoundError
 from src.services.agent_service import get_agent
@@ -181,15 +181,24 @@ async def get_sub_agents(
     return sub_agents, all_state_params
 
 
-async def get_api_key(db: Session, agent: Agent) -> str:
-    """Get the API key for the agent."""
-    api_key = None
+async def get_api_key(db: Session, agent: Agent) -> Tuple[str, Optional[str]]:
+    """Get the API key (and optional base_url) for the agent.
+
+    Returns a (api_key, base_url) tuple. base_url is only populated for stored
+    keys whose provider is a custom OpenAI-compatible endpoint (e.g. Minimax,
+    self-hosted llama servers). Inline keys passed via agent.config never carry
+    a base_url and return None.
+    """
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
 
     # Get API key from api_key_id
     if hasattr(agent, "api_key_id") and agent.api_key_id:
-        if decrypted_key := get_decrypted_api_key(db, agent.api_key_id):
+        decrypted_key, key_base_url = get_api_key_with_base_url(db, agent.api_key_id)
+        if decrypted_key:
             logger.info(f"Using stored API key for agent {agent.name}")
             api_key = decrypted_key
+            base_url = key_base_url
         else:
             logger.error(f"Stored API key not found for agent {agent.name}")
             raise ValueError(
@@ -203,9 +212,11 @@ async def get_api_key(db: Session, agent: Agent) -> str:
             # Check if it is a UUID of a stored key
             try:
                 key_id = uuid.UUID(config_api_key)
-                if decrypted_key := get_decrypted_api_key(db, key_id):
+                decrypted_key, key_base_url = get_api_key_with_base_url(db, key_id)
+                if decrypted_key:
                     logger.info("Config API key is a valid reference")
                     api_key = decrypted_key
+                    base_url = key_base_url
                 else:
                     # Use the key directly
                     api_key = config_api_key
@@ -216,7 +227,7 @@ async def get_api_key(db: Session, agent: Agent) -> str:
             logger.error(f"No API key configured for agent {agent.name}")
             raise ValueError(f"Agent {agent.name} does not have a configured API key")
 
-    return api_key
+    return api_key, base_url
 
 
 def sanitize_for_formatting(instruction: str) -> str:

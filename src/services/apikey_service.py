@@ -34,7 +34,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException, status
 import uuid
 import logging
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.models.models import Agent
@@ -54,8 +54,8 @@ def get_api_key(db: Session, key_id: uuid.UUID) -> Optional[ApiKey]:
 
 
 def get_decrypted_api_key(db: Session, key_id: uuid.UUID, agent: Optional['Agent'] = None) -> Optional[str]:
-    """Get the decrypted value of an API key
-    
+    """Get the decrypted value of an API key.
+
     Args:
         db: Database session
         key_id: API key ID
@@ -63,18 +63,43 @@ def get_decrypted_api_key(db: Session, key_id: uuid.UUID, agent: Optional['Agent
     """
     try:
         key = get_api_key(db, key_id)
-            
+
         if not key or not key.is_active:
             logger.warning(f"API key {key_id} not found or inactive")
             return None
-            
+
         # If agent is provided and it's a shared agent scenario,
-        # allow access to the API key even if it belongs to a different client 
+        # allow access to the API key even if it belongs to a different client
         if agent and agent.api_key_id == key.id:
             logger.info(f"Allowing API key access for agent {agent.name} (shared agent scenario)")
             return decrypt_api_key(key.key)  # Decrypt using shared ENCRYPTION_KEY
-            
+
         return decrypt_api_key(key.key)  # Decrypt using shared ENCRYPTION_KEY
     except Exception as e:
         logger.error(f"Error decrypting API key {key_id}: {str(e)}")
         return None
+
+
+def get_api_key_with_base_url(
+    db: Session,
+    key_id: uuid.UUID,
+    agent: Optional['Agent'] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return the decrypted key together with its optional base_url.
+
+    Custom OpenAI-compatible providers (Minimax, local llama servers, etc.)
+    need a base_url alongside the API key so LiteLlm routes the request to
+    the right host instead of falling back to the OpenAI default.
+    """
+    try:
+        key = get_api_key(db, key_id)
+        if not key or not key.is_active:
+            logger.warning(f"API key {key_id} not found or inactive")
+            return None, None
+
+        base_url = getattr(key, "base_url", None) or None
+        decrypted = decrypt_api_key(key.key)
+        return decrypted, base_url
+    except Exception as e:
+        logger.error(f"Error decrypting API key {key_id}: {str(e)}")
+        return None, None
