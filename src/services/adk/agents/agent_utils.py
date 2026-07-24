@@ -31,7 +31,7 @@ from typing import List, Tuple, Optional
 import uuid
 from google.adk.agents.llm_agent import LlmAgent
 from src.services.adk.tools.exit_loop import ExitLoopAgent
-from src.services.apikey_service import get_decrypted_api_key
+from src.services.apikey_service import get_decrypted_api_key, get_api_key_with_base_url
 from src.utils.logger import setup_logger
 from src.utils.llm_model_routing import normalize_model_for_provider  # re-export
 from src.core.exceptions import AgentNotFoundError
@@ -190,18 +190,24 @@ async def get_sub_agents(
     return sub_agents, all_state_params
 
 
-async def get_api_key(db: Session, agent: Agent) -> Tuple[str, Optional[str]]:
-    """Get the API key and provider for the agent.
+async def get_api_key(
+    db: Session, agent: Agent
+) -> Tuple[str, Optional[str], Optional[str]]:
+    """Get the API key, provider and optional base_url for the agent.
 
     Returns:
-        Tuple of (api_key, provider). `provider` is the stored value from
-        ``evo_core_api_keys.provider`` when the agent references a stored key
-        via ``api_key_id``; otherwise ``None`` (config-supplied raw keys carry
-        no provider metadata). Needed by callers that route through LiteLLM —
-        e.g. OpenRouter keys must be prefixed with ``openrouter/`` (EVO-1684).
+        Tuple of (api_key, provider, base_url). `provider` is the stored value
+        from ``evo_core_api_keys.provider`` when the agent references a stored
+        key via ``api_key_id``; otherwise ``None`` (config-supplied raw keys
+        carry no provider metadata). Needed by callers that route through
+        LiteLLM — e.g. OpenRouter keys must be prefixed with ``openrouter/``
+        (EVO-1684). base_url is only populated for stored keys whose provider
+        is a custom OpenAI-compatible endpoint (e.g. Minimax, self-hosted llama
+        servers); inline keys passed via agent.config never carry one.
     """
-    api_key = None
+    api_key: Optional[str] = None
     provider: Optional[str] = None
+    base_url: Optional[str] = None
 
     # Get API key from api_key_id
     if hasattr(agent, "api_key_id") and agent.api_key_id:
@@ -209,9 +215,11 @@ async def get_api_key(db: Session, agent: Agent) -> Tuple[str, Optional[str]]:
         if api_key_record:
             provider = api_key_record.provider
 
-        if decrypted_key := get_decrypted_api_key(db, agent.api_key_id):
+        decrypted_key, key_base_url = get_api_key_with_base_url(db, agent.api_key_id)
+        if decrypted_key:
             logger.info(f"Using stored API key for agent {agent.name}")
             api_key = decrypted_key
+            base_url = key_base_url
         else:
             logger.error(f"Stored API key not found for agent {agent.name}")
             raise ValueError(
@@ -225,9 +233,11 @@ async def get_api_key(db: Session, agent: Agent) -> Tuple[str, Optional[str]]:
             # Check if it is a UUID of a stored key
             try:
                 key_id = uuid.UUID(config_api_key)
-                if decrypted_key := get_decrypted_api_key(db, key_id):
+                decrypted_key, key_base_url = get_api_key_with_base_url(db, key_id)
+                if decrypted_key:
                     logger.info("Config API key is a valid reference")
                     api_key = decrypted_key
+                    base_url = key_base_url
                 else:
                     # Use the key directly
                     api_key = config_api_key
@@ -238,7 +248,7 @@ async def get_api_key(db: Session, agent: Agent) -> Tuple[str, Optional[str]]:
             logger.error(f"No API key configured for agent {agent.name}")
             raise ValueError(f"Agent {agent.name} does not have a configured API key")
 
-    return api_key, provider
+    return api_key, provider, base_url
 
 
 def sanitize_for_formatting(instruction: str) -> str:

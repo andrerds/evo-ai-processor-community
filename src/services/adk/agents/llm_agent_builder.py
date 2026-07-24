@@ -986,8 +986,9 @@ class LlmAgentBuilder:
                 f"Agent {agent.name} has preload_memory enabled but load_memory is disabled. preload_memory requires load_memory to be enabled."
             )
 
-        # Get API key (and provider, when stored) from api_key_id
-        api_key, api_key_provider = await get_api_key(self.db, agent)
+        # Get API key (and provider, when stored) from api_key_id; api_base is
+        # set for custom OpenAI-compatible providers
+        api_key, api_key_provider, api_base = await get_api_key(self.db, agent)
 
         # Get output_key from config if specified
         output_key = agent.config.get("output_key") if agent.config else None
@@ -1128,6 +1129,8 @@ class LlmAgentBuilder:
         litellm_model, litellm_extra_kwargs = normalize_model_for_provider(
             agent.model, api_key_provider
         )
+        if api_base:
+            litellm_extra_kwargs["api_base"] = api_base
 
         llm_agent_kwargs = {
             "name": agent.name,
